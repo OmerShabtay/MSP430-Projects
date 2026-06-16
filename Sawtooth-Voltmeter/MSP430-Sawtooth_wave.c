@@ -1,83 +1,70 @@
 #include <msp430xG46x.h>
 
-/* ---------------- Sawtooth (KEEP EXACT) ---------------- */
-volatile unsigned int dac_val = 0;              // Current DAC code (0..4095)
-#define STEP      0x10u                         // *** keep same step ***
-#define DAC_MASK  0x0FFFu                       // 12-bit wrap mask
+volatile unsigned int dac_val = 0;
+#define STEP      0x10u
+#define DAC_MASK  0x0FFFu
 
-/* ---------------- LED mapping (from your working LED code style) ---------------- */
-#define LED1_P2   BIT2                          // P2.2
-#define LED2_P2   BIT1                          // P2.1
-#define LED3_P5   BIT1                          // P5.1
+#define LED1_P2   BIT2
+#define LED2_P2   BIT1
+#define LED3_P5   BIT1
 
-/* ---------------- ADC/LED helper globals ---------------- */
-volatile unsigned char do_adc_led = 0;          // Set by ISR, handled in main
+volatile unsigned char do_adc_led = 0;
 
-/* Optional debug pin (if you want) */
-#define HEARTBEAT BIT0                          // P1.0 toggles each tick (may not be an LED)
+#define HEARTBEAT BIT0
 
 static void LED_Init(void)
 {
-    /* Force GPIO on LED pins */
-    P2SEL &= ~(LED1_P2 | LED2_P2);              // P2.1/P2.2 as GPIO
-    P5SEL &= ~LED3_P5;                          // P5.1 as GPIO
+    P2SEL &= ~(LED1_P2 | LED2_P2);
+    P5SEL &= ~LED3_P5;
 
-    /* Directions */
-    P2DIR |= (LED1_P2 | LED2_P2);               // outputs
-    P5DIR |= LED3_P5;                           // output
+    P2DIR |= (LED1_P2 | LED2_P2);
+    P5DIR |= LED3_P5;
 
-    /* Start OFF */
     P2OUT &= ~(LED1_P2 | LED2_P2);
     P5OUT &= ~LED3_P5;
 }
 
 static void REF_Init(void)
 {
-    /* Enable internal 2.5V reference (used by DAC and ADC) */
-    ADC12CTL0 = REFON | REF2_5V;                // 2.5V reference ON
-    __delay_cycles(50000);                      // Wait for reference to settle
+    ADC12CTL0 = REFON | REF2_5V;
+    __delay_cycles(50000);
 }
 
 static void DAC12_Init(void)
 {
-    P6SEL |= BIT6;                              // P6.6 = DAC12_0 output function
+    P6SEL |= BIT6;
 
-    /* Keep DAC config simple (as in sawtooth code) */
-    DAC12_0CTL = DAC12IR | DAC12AMP_5 | DAC12ENC; // Int ref range, medium drive, enable
-    DAC12_0DAT = 0;                             // Start at 0
+    DAC12_0CTL = DAC12IR | DAC12AMP_5 | DAC12ENC;
+    DAC12_0DAT = 0;
 }
 
 static void ADC12_Init_A0(void)
 {
-    P6SEL |= BIT0;                              // P6.0 = ADC input A0 (analog)
+    P6SEL |= BIT0;
 
-    ADC12CTL0 &= ~ENC;                          // Disable conversions while configuring
+    ADC12CTL0 &= ~ENC;
 
-    /* IMPORTANT: do NOT overwrite REFON/REF2_5V -> only OR-in ADC bits */
-    ADC12CTL0 |= ADC12ON | SHT0_2;              // ADC ON + sample/hold time
-    ADC12CTL1  = SHP;                           // Use sampling timer
-    ADC12MCTL0 = INCH_0;                        // Channel A0 -> MEM0
+    ADC12CTL0 |= ADC12ON | SHT0_2;
+    ADC12CTL1  = SHP;
+    ADC12MCTL0 = INCH_0;
 
-    ADC12CTL0 |= ENC;                           // Enable conversions
+    ADC12CTL0 |= ENC;
 }
 
 static void TimerA_Init_1ms_ACLK(void)
 {
-    /* KEEP EXACT timing from sawtooth code: ACLK ~ 32768Hz -> ~1ms ~ 33 counts */
-    TACCR0  = 33 - 1;                           // ~1ms period
-    TACCTL0 = CCIE;                             // Enable CCR0 interrupt
-    TACTL   = TASSEL_1 | MC_1 | TACLR;          // ACLK, Up mode, clear TAR
+    TACCR0  = 33 - 1;
+    TACCTL0 = CCIE;
+    TACTL   = TASSEL_1 | MC_1 | TACLR;
 }
 
 static void LEDs_Update_From_ADC(unsigned int adc)
 {
-    /* Quartiles over 12-bit range (0..4095) */
     P2OUT &= ~(LED1_P2 | LED2_P2);
     P5OUT &= ~LED3_P5;
 
     if (adc < 1024)
     {
-        /* All OFF */
     }
     else if (adc < 2048)
     {
@@ -95,49 +82,46 @@ static void LEDs_Update_From_ADC(unsigned int adc)
 
 int main(void)
 {
-    WDTCTL = WDTPW | WDTHOLD;                   // Stop watchdog
+    WDTCTL = WDTPW | WDTHOLD;
 
-    /* Optional debug heartbeat pin */
     P1DIR |= HEARTBEAT;
     P1OUT &= ~HEARTBEAT;
 
-    LED_Init();                                 // LEDs work like in your “LED working” code
-    REF_Init();                                 // 2.5V reference (shared for DAC+ADC)
-    DAC12_Init();                               // Sawtooth output on P6.6
-    ADC12_Init_A0();                            // Read A0 on P6.0 (jumper from P6.6)
-    TimerA_Init_1ms_ACLK();                     // *** keep sawtooth timing ***
+    LED_Init();
+    REF_Init();
+    DAC12_Init();
+    ADC12_Init_A0();
+    TimerA_Init_1ms_ACLK();
 
     __enable_interrupt();
 
     while (1)
     {
-        __bis_SR_register(LPM0_bits | GIE);     // Sleep until ISR wakes us
+        __bis_SR_register(LPM0_bits | GIE);
 
-        if (do_adc_led)                         // Handle ADC+LED in main (NOT in ISR)
+        if (do_adc_led)
         {
             unsigned int adc_val;
 
             do_adc_led = 0;
 
-            ADC12CTL0 |= ADC12SC;               // Start conversion
-            while (ADC12CTL1 & ADC12BUSY) ;     // Wait until done
-            adc_val = ADC12MEM0;                // Read result
+            ADC12CTL0 |= ADC12SC;
+            while (ADC12CTL1 & ADC12BUSY) ;
+            adc_val = ADC12MEM0;
 
-            LEDs_Update_From_ADC(adc_val);      // Update LEDs based on level
+            LEDs_Update_From_ADC(adc_val);
         }
     }
 }
 
-/* ---------------- TimerA ISR (KEEP SAWTOOTH EXACT) ---------------- */
 #pragma vector = TIMERA0_VECTOR
 __interrupt void TimerA_ISR(void)
 {
-    P1OUT ^= HEARTBEAT;                         // Optional debug toggle
+    P1OUT ^= HEARTBEAT;
 
-    /* EXACT sawtooth: same step, same wrap, same update frequency */
     dac_val = (dac_val + STEP) & DAC_MASK;
     DAC12_0DAT = dac_val;
 
-    do_adc_led = 1;                             // Request ADC+LED update in main
-    __bic_SR_register_on_exit(LPM0_bits);       // Wake main without delaying ISR
+    do_adc_led = 1;
+    __bic_SR_register_on_exit(LPM0_bits);
 }
